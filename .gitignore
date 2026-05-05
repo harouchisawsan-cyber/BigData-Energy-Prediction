@@ -216,3 +216,14 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Données lourdes
+*.csv
+*.parquet
+*.zip
+data/
+datasets/
+
+# Logs et temporaires
+*.log
+.DS_Store
