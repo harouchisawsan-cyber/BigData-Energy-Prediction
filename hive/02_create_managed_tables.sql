@@ -10,6 +10,11 @@ CREATE TABLE IF NOT EXISTS managed_meter_readings (
 PARTITIONED BY (meter_type INT) 
 STORED AS PARQUET; -- Format demandé
 
+-- Section : Fiabilisation des données
+-- Ajout d'une contrainte CHECK pour interdire les consommations énergétiques négatives
+ALTER TABLE managed_meter_readings 
+ADD CONSTRAINT check_conso_positive CHECK (meter_reading >= 0.0) DISABLE NOVALIDATE;
+
 -- Activation du partitionnement dynamique
 SET hive.exec.dynamic.partition = true;
 SET hive.exec.dynamic.partition.mode = nonstrict;
