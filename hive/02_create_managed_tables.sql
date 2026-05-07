@@ -18,3 +18,8 @@ SET hive.exec.dynamic.partition.mode = nonstrict;
 INSERT INTO TABLE managed_meter_readings PARTITION(meter_type)
 SELECT building_id, timestamp, meter_reading, meter as meter_type 
 FROM ext_meter_readings;
+
+
+EXPLAIN SELECT meter_type, AVG(meter_reading) 
+FROM managed_meter_readings 
+GROUP BY meter_type;
