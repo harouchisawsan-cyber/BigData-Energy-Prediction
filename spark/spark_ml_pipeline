@@ -1,0 +1,139 @@
+# ============================================================================
+// PARTIE SPARK ET MACHINE LEARNING (Notebook Zeppelin)
+# ============================================================================
+
+%spark2.pyspark
+# --- ÉTAPE 1 : CHARGEMENT DES DONNÉES ---
+# On récupère les fichiers Parquet de Hive et les fichiers CSV de Sqoop
+from pyspark.sql import functions as F
+
+path_readings = "/warehouse/tablespace/managed/hive/energy_db_hive.db/managed_meter_readings"
+readings = spark.read.parquet(path_readings)
+
+path_buildings = "/user/admin/energy_data/buildings"
+buildings = spark.read.option("header", "false").option("inferSchema", "true").csv(path_buildings)
+
+# On renomme les colonnes et on fait la jointure
+buildings = buildings.toDF("site_id", "building_id", "primary_use", "square_feet", "year_built", "floor_count")
+df = readings.join(buildings, "building_id")
+
+# On utilise le cache pour optimiser les performances (Exigence du projet)
+df.cache()
+
+print("Chargement réussi !")
+print("Nombre de lignes :", df.count())
+df.show(5) 
+
+%spark2.pyspark
+# --- ÉTAPE 2 : ANALYSE DE LA QUALITÉ ---
+# On vérifie les valeurs manquantes (NULL) et les statistiques de base
+from pyspark.sql import functions as F
+
+print("Analyse des valeurs manquantes (NULL) :")
+df.select([F.count(F.when(F.col(c).isNull(), c)).alias(c) for c in df.columns]).show()
+
+df.select("meter_reading").describe().show() 
+
+%spark2.pyspark
+# --- ÉTAPE 3 : NETTOYAGE ET PRÉPARATION ---
+# On supprime les colonnes inutiles et on crée les variables de temps (heure, jour, mois)
+df_prepared = df.drop("floor_count") 
+
+df_prepared = df_prepared.withColumn("hour", F.hour("ts")) \
+                         .withColumn("day_of_week", F.dayofweek("ts")) \
+                         .withColumn("month", F.month("ts"))
+
+# On filtre pour garder uniquement les consommations positives
+df_prepared = df_prepared.filter("meter_reading > 0")
+
+print("Données préparées pour l'analyse :")
+df_prepared.show(5)
+
+%spark2.pyspark
+# --- ÉTAPE 4 : CRÉATION DE LA VUE SQL ---
+# On enregistre le DataFrame pour pouvoir faire des graphiques en SQL
+df_prepared.createOrReplaceTempView("data_viz") 
+
+%spark2.sql
+# --- ÉTAPE 5 : VISUALISATION ---
+-- Analyse de la consommation moyenne par heure pour le rapport
+SELECT hour, AVG(meter_reading) as conso_moyenne
+FROM data_viz
+GROUP BY hour
+ORDER BY hour 
+
+%spark2
+// --- ÉTAPE 6 : CONFIGURATION DU MACHINE LEARNING (SCALA) ---
+// Passage en Scala pour éviter l'absence de numpy et gagner en performance
+import org.apache.spark.ml.Pipeline
+import org.apache.spark.ml.feature.{StringIndexer, VectorAssembler}
+import org.apache.spark.ml.regression.{LinearRegression, RandomForestRegressor}
+import org.apache.spark.ml.evaluation.RegressionEvaluator
+
+val dfPrepared = spark.table("data_viz") 
+
+val indexer = new StringIndexer()
+  .setInputCol("primary_use")
+  .setOutputCol("primary_use_index")
+
+val featureCols = Array("building_id", "meter_type", "square_feet", "hour", "day_of_week", "month")
+val assembler = new VectorAssembler()
+  .setInputCols(featureCols)
+  .setOutputCol("features")
+
+val Array(trainData, testData) = dfPrepared.randomSplit(Array(0.8, 0.2), seed = 42)
+
+val lr = new LinearRegression().setLabelCol("meter_reading").setFeaturesCol("features")
+val rf = new RandomForestRegressor().setLabelCol("meter_reading").setFeaturesCol("features")
+
+println("Structure ML prête en Scala !") 
+
+%spark2
+// --- ÉTAPE 7 : ENTRAÎNEMENT ET RMSE ---
+// Calcul du RMSE pour comparer la Régression Linéaire et le Random Forest
+val pipelineLR = new Pipeline().setStages(Array(indexer, assembler, lr))
+val modelLR = pipelineLR.fit(trainData)
+val predictionsLR = modelLR.transform(testData)
+
+val pipelineRF = new Pipeline().setStages(Array(indexer, assembler, rf))
+val modelRF = pipelineRF.fit(trainData)
+val predictionsRF = modelRF.transform(testData)
+
+val evaluator = new RegressionEvaluator()
+  .setLabelCol("meter_reading")
+  .setPredictionCol("prediction")
+  .setMetricName("rmse")
+
+val rmseLR = evaluator.evaluate(predictionsLR)
+val rmseRF = evaluator.evaluate(predictionsRF)
+
+println(s"RMSE Régression Linéaire : $rmseLR")
+println(s"RMSE Random Forest : $rmseRF") 
+
+%spark2
+// --- ÉTAPE 8 : MAE ET R2 ---
+// Calcul des autres métriques demandées dans le cahier des charges
+val evaluatorMAE = new RegressionEvaluator().setLabelCol("meter_reading").setPredictionCol("prediction").setMetricName("mae")
+val evaluatorR2 = new RegressionEvaluator().setLabelCol("meter_reading").setPredictionCol("prediction").setMetricName("r2")
+
+val maeRF = evaluatorMAE.evaluate(predictionsRF)
+val r2RF = evaluatorR2.evaluate(predictionsRF)
+
+val maeLR = evaluatorMAE.evaluate(predictionsLR)
+val r2LR = evaluatorR2.evaluate(predictionsLR)
+
+println("--- TABLEAU COMPARATIF FINAL ---")
+println(f"MODÈLE            | RMSE       | MAE        | R2")
+println(f"Random Forest     | $rmseRF%1.2f | $maeRF%1.2f | $r2RF%1.4f")
+println(f"Régression Linéaire| $rmseLR%1.2f | $maeLR%1.2f | $r2LR%1.4f") 
+
+%spark2
+// --- ÉTAPE 9 : AFFICHAGE FINAL ---
+println("--- RÉSULTATS FINAUX ---")
+println(s"RMSE Random Forest : $rmseRF")
+println(s"MAE Random Forest  : $maeRF")
+println(s"R2 Random Forest   : $r2RF")
+
+println(s"RMSE Régression Linéaire : $rmseLR")
+println(s"MAE Régression Linéaire  : $maeLR")
+println(s"R2 Régression Linéaire   : $r2LR")
