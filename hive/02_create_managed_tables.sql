@@ -22,4 +22,6 @@ FROM ext_meter_readings;
 
 EXPLAIN SELECT meter_type, AVG(meter_reading) 
 FROM managed_meter_readings 
+WHERE meter_type = 1
 GROUP BY meter_type;
+
